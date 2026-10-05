@@ -3,14 +3,11 @@ from datetime import datetime
 from os import listdir, makedirs, path, unlink, walk
 from zipfile import ZIP_DEFLATED, ZipFile
 
-import plug
 from requests import Response
 from semantic_version import Version
 
-from elitedangereuse.constants import RequestMethod
 from elitedangereuse.debug import Debug
-from elitedangereuse.httprequestmanager import EliteDangereuseRequest
-# from elitedangereuse.utils import tl
+from elitedangereuse.httprequestmanager import ReleaseRequest
 
 BACKUPS_KEEP = 3
 DATETIME_FORMAT = "%Y-%m-%d-%H-%M-%S"
@@ -18,7 +15,7 @@ FILE_LATEST = "latest.zip"
 FILE_DISABLE = "disable-auto-update.txt"
 FOLDER_BACKUPS: str = "backups"
 FOLDER_UPDATES: str = "updates"
-URL_PLUGIN_VERSION = "https://api.github.com/repos/elitedangereuse/Icarus-plugin/releases/latest" # Doesn't include pre-releases or draft releases
+URL_PLUGIN_VERSION = "https://api.github.com/repos/elitedangereuse/SCO-Cooldown/releases/latest"
 
 
 class UpdateManager:
@@ -51,10 +48,10 @@ class UpdateManager:
         except OSError as e:
             if e.errno != errno.EEXIST: return
 
-        self.elitedangereuse.request_manager.queue_request(URL_PLUGIN_VERSION, RequestMethod.GET, callback=self._version_info_received)
+        self.elitedangereuse.request_manager.queue_request(URL_PLUGIN_VERSION, callback=self._version_info_received)
 
 
-    def _version_info_received(self, success: bool, response: Response, request: EliteDangereuseRequest):
+    def _version_info_received(self, success: bool, response: Response, request: ReleaseRequest):
         """
         Latest version info received from the server. Called from a Thread.
         """
@@ -64,7 +61,7 @@ class UpdateManager:
 
         version_data:dict = response.json()
 
-        if version_data['draft'] == True or version_data['prerelease'] == True:
+        if version_data.get('draft') or version_data.get('prerelease'):
             # This should never happen because the latest version URL excludes these, but in case GitHub has a wobble
             Debug.logger.info("Latest server version is draft or pre-release, ignoring")
             return
@@ -83,10 +80,10 @@ class UpdateManager:
 
         if self.remote_version > self.elitedangereuse.version:
             # Download the new release
-            self.elitedangereuse.request_manager.queue_request(self.release_url, RequestMethod.GET, callback=self._download_received, stream=True)
+            self.elitedangereuse.request_manager.queue_request(self.release_url, callback=self._download_received, stream=True)
 
 
-    def _download_received(self, success:bool, response:Response, request:EliteDangereuseRequest):
+    def _download_received(self, success:bool, response:Response, request:ReleaseRequest):
         """
         The download request has initially returned. This is a streamed download so the actual receipt of the file must be chunked
         """
@@ -105,9 +102,6 @@ class UpdateManager:
         # Full success, download complete and available
         self.update_available = True
 
-        # Update UI, deferred because we're in a thread
-        if self.elitedangereuse.ui.frame: self.elitedangereuse.ui.frame.after(1000, self.elitedangereuse.ui.update_plugin_frame())
-
         # Perform update
         self._update_plugin()
 
@@ -116,7 +110,7 @@ class UpdateManager:
         """
         Backup the old plugin and extract the new, ready for next launch
         """
-        Debug.logger.info(f"Auto updating Icarus from version {self.elitedangereuse.version} to {self.remote_version}")
+        Debug.logger.info(f"Auto updating SCO Cooldown from version {self.elitedangereuse.version} to {self.remote_version}")
 
         self._create_backup()
         self._delete_old_backups()

@@ -1,5 +1,5 @@
-# Change Log
+# Changelog
 
-## vx.x.x - xxxx-xx-xx
+## 0.1.0
 
-Initial release.
+- Initial SCO cooldown indicator and ready alert.

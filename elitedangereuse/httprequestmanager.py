@@ -1,140 +1,54 @@
+"""Background HTTP downloads used solely by the self-update mechanism."""
+
 from queue import Queue
-from re import IGNORECASE, compile, match
 from threading import Thread
-from time import sleep
+from typing import Callable
 
 import requests
-from requests import Response
 
 from config import config
-from elitedangereuse.constants import RequestMethod
 from elitedangereuse.debug import Debug
 
-TIME_WORKER_PERIOD_S = 1
-TIMEOUT_S = 10
+TIMEOUT_SECONDS = 10
 
 
-class EliteDangereuseRequest:
-    """
-    Encapsulates a request that can be queued and processed in a thread
-    """
-    def __init__(self, endpoint:str, method:RequestMethod, callback:callable, params:dict, headers:dict, stream:bool, payload:dict|None, data:dict|None):
-        # The endpoint to call
-        self.endpoint:str = endpoint
-        # The type of request
-        self.method:RequestMethod = method
-        # A callback function to call when the response is received
-        self.callback:callable = callback
-        # Request parameters
-        self.params:dict = params
-        # Request headers
-        self.headers:dict = headers
-        # For requests with large content, True to stream in chunks
-        self.stream:bool = stream
-        # For requests that send data, a Dict containing the payload
-        self.payload:dict|None = payload
-        # Any additional data required to be passed to the callback function when the response is received
-        self.data:dict|None = data
+class ReleaseRequest:
+    """A queued GitHub release download."""
 
-    def __str__(self):
-        """
-        String representation of this object
-        """
-        return f"EliteDangereuseRequest: \n" \
-                    f"  endpoint: {self.endpoint} \n" \
-                    f"  method: {self.method} \n" \
-                    f"  params: {self.params} \n" \
-                    f"  headers: {self.headers} \n" \
-                    f"  stream: {self.stream} \n" \
-                    f"  payload: {self.payload} \n" \
-                    f"  data: {self.data} \n"
+    def __init__(self, endpoint: str, callback: Callable | None, stream: bool):
+        self.endpoint = endpoint
+        self.callback = callback
+        self.stream = stream
 
 
 class HTTPRequestManager:
-    """
-    Handles the queuing and processing of requests
-    """
-    def __init__(self, elitedangereuse):
-        self.elitedangereuse = elitedangereuse
-        self.re_url = compile(
-            r'^(?:http|ftp)s?://' # http:// or https://
-            r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|' #domain...
-            r'localhost|' #localhost...
-            r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})' # ...or ip
-            r'(?::\d+)?' # optional port
-            r'(?:/?|[/?]\S+)$', IGNORECASE)
-        self.request_queue:Queue = Queue()
+    """Process release metadata and ZIP downloads outside EDMC's UI thread."""
 
-        self.request_thread: Thread = Thread(target=self._worker, name="EliteDangereuse Request worker")
-        self.request_thread.daemon = True
+    def __init__(self, plugin):
+        self.plugin = plugin
+        self.request_queue: Queue[ReleaseRequest] = Queue()
+        self.request_thread = Thread(target=self._worker, name="SCO Cooldown update worker", daemon=True)
         self.request_thread.start()
 
-
-    def queue_request(self, endpoint:str, method:RequestMethod, callback:callable = None, params:dict = {}, headers:dict = {}, stream:bool = False, payload:dict|None = None, data:dict|None = None):
-        """
-        Add a request to the queue
-        """
-        if not self.url_valid(endpoint):
-            Debug.logger.info(f"Attempted to call {endpoint} which is not a well-formed URL")
-            return
-
-        headers:dict = {'User-Agent': f"{self.elitedangereuse.plugin_name}/{self.elitedangereuse.version}"} | headers
-
-        self.request_queue.put(EliteDangereuseRequest(endpoint, method, callback, params, headers, stream, payload, data))
-
-
-    def url_valid(self, url:str) -> bool:
-        """
-        Check whether a URL is well-formed
-        """
-        if url is None: return False
-        return match(self.re_url, url) is not None
-
+    def queue_request(self, endpoint: str, callback: Callable | None = None, stream: bool = False) -> None:
+        """Queue a GET request for the updater; this plugin performs no uploads."""
+        self.request_queue.put(ReleaseRequest(endpoint, callback, stream))
 
     def _worker(self) -> None:
-        """
-        Handle request thread work
-        """
-        Debug.logger.debug("Starting Request Worker...")
-
-        while True:
-            if config.shutting_down:
-                Debug.logger.debug("Shutting down RequestManager Worker...")
-                return
-
-            sleep(TIME_WORKER_PERIOD_S)
-
-            # Fetch from the queue. Blocks indefinitely until an item is available.
-            request: EliteDangereuseRequest = self.request_queue.get()
-
-            if not isinstance(request, EliteDangereuseRequest):
-                Debug.logger.error(f"Queued request was not an instance of EliteDangereuseRequest")
-                continue
-
-            Debug.logger.info(f"Processing {request.method} request {request.endpoint}")
-
-            response:Response = None
+        while not config.shutting_down:
+            request = self.request_queue.get()
             try:
-                match request.method:
-                    case RequestMethod.GET: response = requests.get(request.endpoint, params=request.params, headers=request.headers, stream=request.stream, timeout=TIMEOUT_S)
-                    case RequestMethod.POST: response = requests.post(request.endpoint, params=request.params, headers=request.headers, stream=request.stream, json=request.payload, timeout=TIMEOUT_S)
-                    case RequestMethod.PUT: response = requests.put(request.endpoint, params=request.params, headers=request.headers, stream=request.stream, json=request.payload, timeout=TIMEOUT_S)
-                    case RequestMethod.PATCH: response = requests.patch(request.endpoint, params=request.params, headers=request.headers, stream=request.stream, json=request.payload, timeout=TIMEOUT_S)
-                    case RequestMethod.DELETE: response = requests.delete(request.endpoint, params=request.params, headers=request.headers, stream=request.stream, timeout=TIMEOUT_S)
-                    case RequestMethod.HEAD: response = requests.head(request.endpoint, params=request.params, headers=request.headers, stream=request.stream, timeout=TIMEOUT_S)
-                    case RequestMethod.OPTIONS: response = requests.options(request.endpoint, params=request.params, headers=request.headers, stream=request.stream, timeout=TIMEOUT_S)
-                    case _:
-                        Debug.logger.warning(f"Invalid request method {request.type}")
-                        if request.callback: request.callback(False, response, request)
-                        continue
-
+                response = requests.get(
+                    request.endpoint,
+                    headers={"User-Agent": f"{self.plugin.plugin_name}/{self.plugin.version}"},
+                    stream=request.stream,
+                    timeout=TIMEOUT_SECONDS,
+                )
                 response.raise_for_status()
-
-            except requests.exceptions.RequestException as e:
-                Debug.logger.info(f"Request failure {request.endpoint}: {str(e)}")
-                if request.callback: request.callback(False, response, request)
-
+            except requests.RequestException as error:
+                Debug.logger.info("Update request failed for %s: %s", request.endpoint, error)
+                if request.callback:
+                    request.callback(False, None, request)
             else:
-                # Success
-                Debug.logger.info(f"Request success {request.endpoint}")
-                if request.callback: request.callback(True, response, request)
+                if request.callback:
+                    request.callback(True, response, request)
