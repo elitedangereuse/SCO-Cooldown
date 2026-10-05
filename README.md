@@ -18,3 +18,9 @@ file; WAV is the most portable choice. SCO is detected from `Flags2` bit 20
 When this issue is fixed, this plugin will probably become useless:
 
 https://issues.frontierstore.net/issue-detail/87980
+
+## Installation
+
+Please follow the updated instructions here:
+
+https://github.com/EDCD/EDMarketConnector/wiki/Plugins
