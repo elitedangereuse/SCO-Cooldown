@@ -48,6 +48,11 @@ def prefs_changed(cmdr: str, is_beta: bool) -> None:
     this.ui.save_prefs()
 
 
+def journal_entry(cmdr: str, is_beta: bool, system: str | None, station: str | None, entry: dict, state: dict):
+    """Receive EDMC's journal state, including the active ship identity."""
+    this.journal_entry(cmdr, is_beta, system, station, entry, state)
+
+
 def dashboard_entry(cmdr: str, is_beta: bool, entry: dict):
     """
     Parse an incoming dashboard entry and store the data we need

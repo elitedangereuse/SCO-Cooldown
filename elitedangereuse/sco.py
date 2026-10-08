@@ -29,6 +29,7 @@ class SCOSnapshot:
 
     state: SCOState
     seconds_remaining: float = 0.0
+    cooldown_seconds: float = 0.0
     just_became_ready: bool = False
 
 
@@ -40,6 +41,7 @@ class SCOCooldown:
         self._clock = clock
         self._is_active: bool | None = None
         self._cooldown_ends_at: float | None = None
+        self._cooldown_duration = 0.0
         self._notify_when_ready = False
 
     def update(self, status: dict) -> None:
@@ -57,11 +59,13 @@ class SCOCooldown:
             return
 
         if self._is_active and not is_active:
-            self._cooldown_ends_at = self._clock() + self.cooldown_seconds
+            self._cooldown_duration = self.cooldown_seconds
+            self._cooldown_ends_at = self._clock() + self._cooldown_duration
             self._notify_when_ready = True
         elif is_active:
             # SCO was used again before the previous timer completed.
             self._cooldown_ends_at = None
+            self._cooldown_duration = 0.0
             self._notify_when_ready = False
 
         self._is_active = is_active
@@ -77,9 +81,10 @@ class SCOCooldown:
 
         remaining = self._cooldown_ends_at - self._clock()
         if remaining > 0:
-            return SCOSnapshot(SCOState.COOLDOWN, remaining)
+            return SCOSnapshot(SCOState.COOLDOWN, remaining, self._cooldown_duration)
 
         self._cooldown_ends_at = None
+        self._cooldown_duration = 0.0
         just_became_ready = self._notify_when_ready
         self._notify_when_ready = False
         return SCOSnapshot(SCOState.READY, just_became_ready=just_became_ready)

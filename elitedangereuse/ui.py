@@ -26,10 +26,15 @@ class UI:
         self.frame: tk.Frame = None
         self._refresh_timer: str | None = None
         self._cooldown_var = tk.IntVar(value=DEFAULT_COOLDOWN_SECONDS)
+        self._ship_override_enabled_var = tk.BooleanVar(value=False)
+        self._ship_override_var = tk.IntVar(value=DEFAULT_COOLDOWN_SECONDS)
         self._progress_style_name = "SCOCooldown.Horizontal.TProgressbar"
         self._bundled_sound_path = Path(elitedangereuse.plugin_dir) / "sco_ready.wav"
         self._sound_path_var = tk.StringVar(value=config.get_str(SOUND_PATH_SETTING, default=""))
         self._sound_path_label: tk.Label | None = None
+        self._ship_label: tk.Label | None = None
+        self._ship_override_label: tk.Label | None = None
+        self._ship_override_spinbox: tk.Spinbox | None = None
 
 
     def get_plugin_frame(self, parent_frame: tk.Frame) -> tk.Frame:
@@ -49,6 +54,8 @@ class UI:
             style=self._progress_style_name,
         )
         self.sco_progress.grid(row=1, column=0, pady=(3, 0), sticky=tk.EW)
+        self._ship_label = tk.Label(self.frame)
+        self._ship_label.grid(row=2, column=0, pady=(3, 0), sticky=tk.W)
         self.refresh_sco_status()
 
         return self.frame
@@ -62,19 +69,39 @@ class UI:
         cooldown = config.get_int(COOLDOWN_SETTING, default=DEFAULT_COOLDOWN_SECONDS)
         self._cooldown_var.set(max(1, cooldown))
 
-        nb.Label(frame, text="SCO cooldown (seconds):").grid(row=0, column=0, padx=(0, 8), pady=4, sticky=tk.W)
+        nb.Label(frame, text="Fallback cooldown (seconds):").grid(row=0, column=0, padx=(0, 8), pady=4, sticky=tk.W)
         tk.Spinbox(frame, from_=1, to=120, textvariable=self._cooldown_var, width=5).grid(row=0, column=1, pady=4, sticky=tk.W)
+
+        self._ship_override_label = nb.Label(frame)
+        self._ship_override_label.grid(row=1, column=0, columnspan=2, pady=(10, 2), sticky=tk.W)
+        self._update_ship_override_controls()
+        nb.Checkbutton(
+            frame,
+            text="Override this ship's cooldown:",
+            variable=self._ship_override_enabled_var,
+            command=self._set_ship_override_control_state,
+        ).grid(row=2, column=0, padx=(0, 8), pady=2, sticky=tk.W)
+        self._ship_override_spinbox = tk.Spinbox(
+            frame,
+            from_=1,
+            to=120,
+            textvariable=self._ship_override_var,
+            width=5,
+        )
+        self._ship_override_spinbox.grid(row=2, column=1, pady=2, sticky=tk.W)
+        self._set_ship_override_control_state()
+
         nb.Button(frame, text="Test sound", command=self._play_ready_sound).grid(
-            row=1, column=0, columnspan=2, pady=(4, 0), sticky=tk.W
+            row=3, column=0, columnspan=2, pady=(10, 0), sticky=tk.W
         )
         self._sound_path_label = nb.Label(frame)
-        self._sound_path_label.grid(row=2, column=0, columnspan=2, pady=(10, 2), sticky=tk.W)
+        self._sound_path_label.grid(row=4, column=0, columnspan=2, pady=(10, 2), sticky=tk.W)
         self._update_sound_path_label()
         nb.Button(frame, text="Choose sound…", command=self._choose_sound).grid(
-            row=3, column=0, padx=(0, 6), sticky=tk.W
+            row=5, column=0, padx=(0, 6), sticky=tk.W
         )
         nb.Button(frame, text="Use bundled sound", command=self._use_bundled_sound).grid(
-            row=3, column=1, sticky=tk.W
+            row=5, column=1, sticky=tk.W
         )
 
         return frame
@@ -91,7 +118,15 @@ class UI:
             self._cooldown_var.set(cooldown)
         config.set(COOLDOWN_SETTING, cooldown)
         config.set(SOUND_PATH_SETTING, self._sound_path_var.get().strip())
-        self.elitedangereuse.sco.cooldown_seconds = float(cooldown)
+        self.elitedangereuse.set_fallback_cooldown_seconds(cooldown)
+
+        try:
+            ship_override = max(1, self._ship_override_var.get())
+        except tk.TclError:
+            ship_override = DEFAULT_COOLDOWN_SECONDS
+        self.elitedangereuse.set_current_ship_override(
+            ship_override if self._ship_override_enabled_var.get() else None
+        )
 
     def refresh_sco_status(self):
         """Render the tracker state and keep the countdown moving."""
@@ -106,7 +141,7 @@ class UI:
         if snapshot.state is SCOState.ACTIVE:
             self._set_progress(0, "orange", "SCO overdrive active")
         elif snapshot.state is SCOState.COOLDOWN:
-            cooldown = max(1, self.elitedangereuse.sco.cooldown_seconds)
+            cooldown = max(1, snapshot.cooldown_seconds)
             progress = 100 * (1 - snapshot.seconds_remaining / cooldown)
             self._set_progress(progress, "orange", f"SCO cooldown: {snapshot.seconds_remaining:.1f}s")
             self._refresh_timer = self.frame.after(100, self.refresh_sco_status)
@@ -116,6 +151,8 @@ class UI:
                 self._play_ready_sound()
         else:
             self._set_progress(0, "gray", "Waiting for Status.json")
+
+        self._update_ship_label()
 
     def stop(self):
         """Cancel pending Tk callbacks before EDMC destroys the plugin frame."""
@@ -128,6 +165,42 @@ class UI:
         ttk.Style(self.frame).configure(self._progress_style_name, background=colour)
         self.sco_progress.configure(value=max(0, min(100, value)))
         self.sco_status.configure(text=text)
+
+    def _update_ship_label(self):
+        if self._ship_label is None:
+            return
+        ship = self.elitedangereuse.current_ship
+        if ship is None:
+            self._ship_label.configure(text="Ship: waiting for EDMC journal state")
+            return
+        self._ship_label.configure(
+            text=f"Ship: {ship.display_name} — cooldown: {self.elitedangereuse.current_cooldown_seconds()} s"
+        )
+
+    def _update_ship_override_controls(self):
+        """Refresh the current-ship settings after EDMC identifies a ship."""
+        if self._ship_override_label is None:
+            return
+        ship = self.elitedangereuse.current_ship
+        if ship is None or ship.ship_id is None:
+            self._ship_override_label.configure(text="Current ship: waiting for EDMC journal state")
+            self._ship_override_enabled_var.set(False)
+            return
+
+        automatic = self.elitedangereuse.automatic_current_cooldown_seconds()
+        override = self.elitedangereuse.current_ship_override_seconds()
+        self._ship_override_label.configure(
+            text=f"Current ship: {ship.display_name} (automatic: {automatic} s)"
+        )
+        self._ship_override_enabled_var.set(override is not None)
+        self._ship_override_var.set(override or automatic)
+
+    def _set_ship_override_control_state(self):
+        if self._ship_override_spinbox is None:
+            return
+        has_ship = self.elitedangereuse.current_ship is not None and self.elitedangereuse.current_ship.ship_id is not None
+        state = tk.NORMAL if has_ship and self._ship_override_enabled_var.get() else tk.DISABLED
+        self._ship_override_spinbox.configure(state=state)
 
     def _play_ready_sound(self):
         """Play the selected alert on Windows, Linux, or macOS."""
