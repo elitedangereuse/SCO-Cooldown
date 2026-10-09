@@ -11,17 +11,22 @@ CASPIAN_SHIP_TYPE = "Explorer_NX"
 
 # FDevIDs shipyard.csv entries from Python Mk II onwards.  Caspian is listed
 # separately because its observed SCO cooldown is shorter than the group rule.
-NEW_GENERATION_SHIP_TYPES = frozenset({
-    "Python_NX",
-    "Type8",
-    "Mandalay",
-    "CobraMkV",
-    "Corsair",
-    "PantherMkII",
-    "LakonMiner",
-    "SmallCombat01_NX",
-    "MediumTransport01",
-})
+NEW_GENERATION_SHIP_TYPES = frozenset(
+    {
+        "Python_NX",
+        "Type8",
+        "Mandalay",
+        "CobraMkV",
+        "Corsair",
+        "PantherMkII",
+        "LakonMiner",
+        "SmallCombat01_NX",
+        "MediumTransport01",
+    }
+)
+NEW_GENERATION_SHIP_TYPES_CASEFOLDED = frozenset(
+    ship_type.casefold() for ship_type in NEW_GENERATION_SHIP_TYPES
+)
 
 
 @dataclass(frozen=True)
@@ -56,13 +61,16 @@ class CurrentShip:
     def display_name(self) -> str:
         """A concise label for EDMC's main panel and preferences page."""
         user_name = self.ship_name or self.ship_ident
-        return f"{user_name} ({self.ship_type})" if user_name else self.ship_type
+        return (
+            f"{user_name} ({self.ship_type})" if user_name else self.ship_type
+        )
 
 
 def automatic_cooldown_seconds(ship_type: str, fallback_seconds: int) -> int:
     """Return the best known cooldown for an EDMC internal ship identifier."""
-    if ship_type == CASPIAN_SHIP_TYPE:
+    normalized_ship_type = ship_type.casefold()
+    if normalized_ship_type == CASPIAN_SHIP_TYPE.casefold():
         return CASPIAN_COOLDOWN_SECONDS
-    if ship_type in NEW_GENERATION_SHIP_TYPES:
+    if normalized_ship_type in NEW_GENERATION_SHIP_TYPES_CASEFOLDED:
         return NEW_GENERATION_COOLDOWN_SECONDS
     return LEGACY_COOLDOWN_SECONDS if ship_type else fallback_seconds
